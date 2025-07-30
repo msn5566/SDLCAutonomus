@@ -1,5 +1,6 @@
-package com.msn.SDLCAPI.agents;
+package com.msn.SDLCAutonomus.agents;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -11,9 +12,9 @@ import com.google.adk.runner.InMemoryRunner;
 import com.google.adk.sessions.Session;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
-import com.msn.SDLCAPI.model.ProjectConfig;
-import com.msn.SDLCAPI.model.WorkflowResult;
-import com.msn.SDLCAPI.service.UtilityService;
+import com.msn.SDLCAutonomus.model.ProjectConfig;
+import com.msn.SDLCAutonomus.model.WorkflowResult;
+import com.msn.SDLCAutonomus.service.UtilityService;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,7 +44,7 @@ public class MainWorkflowAgent {
 
     public WorkflowResult runMainWorkflow(String userInput, ProjectConfig projectConfig, Map<String, String> agentPrompts, List<String> existingPomDependencies) {
         final SequentialAgent workflow = buildWorkflow(projectConfig, agentPrompts, existingPomDependencies);
-        final WorkflowResult workflowResult = new WorkflowResult();
+        final WorkflowResult workflowResult = new WorkflowResult("feat: Initial project scaffold by AI agent","","",new ArrayList<>());
 
         try {
             utilityService.retryWithBackoff(() -> {

@@ -1,4 +1,4 @@
-package com.msn.SDLCAPI.agents;
+package com.msn.SDLCAutonomus.agents;
 
 import org.springframework.stereotype.Service;
 
@@ -8,7 +8,7 @@ import com.google.adk.runner.InMemoryRunner;
 import com.google.adk.sessions.Session;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
-import com.msn.SDLCAPI.service.UtilityService;
+import com.msn.SDLCAutonomus.service.UtilityService;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,7 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 @AllArgsConstructor
 public class BuildCorrectorAgent {
 
-    private static final String BUILD_CORRECTOR_AGENT_NAME = null;
+    private static final String BUILD_CORRECTOR_AGENT_NAME = "BuildCorrectorAgent";
     private final UtilityService utilityService;
 
     public String runBuildCorrectorAgent(String buildLog, String reviewAnalysis, String allSourceFiles) {

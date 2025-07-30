@@ -1,4 +1,4 @@
-package com.msn.SDLCAPI.service;
+package com.msn.SDLCAutonomus.service;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -8,7 +8,7 @@ import java.util.Scanner;
 
 import org.springframework.stereotype.Service;
 
-import com.msn.SDLCAPI.model.JiraConfig;
+import com.msn.SDLCAutonomus.model.JiraConfig;
 
 import lombok.extern.slf4j.Slf4j;
 import java.net.http.HttpClient;
@@ -23,7 +23,7 @@ import org.json.JSONObject;
 public class ConfigService {
 
 
-    public JiraConfig getJiraConfig() throws IOException {
+    public JiraConfig getJiraConfig(String issueTicket) throws IOException {
         String url = System.getenv("JIRA_URL");
         String email = System.getenv("JIRA_EMAIL");
         String token = System.getenv("JIRA_API_TOKEN");
@@ -37,12 +37,12 @@ public class ConfigService {
             throw new IOException("Missing required environment variables: " + String.join(", ", missingVars));
         }
 
-        String issue;
+        /*String issueTicket;
         try (Scanner scanner = new Scanner(System.in, StandardCharsets.UTF_8)) {
             log.info("Enter the Jira Issue Key (e.g., PROJ-123):");
-            issue = scanner.nextLine().trim();
-        }
-        return new JiraConfig(url, email, token, issue);
+            issueTicket = scanner.nextLine().trim();
+        }*/
+        return new JiraConfig(url, email, token, issueTicket);
     }
 
 

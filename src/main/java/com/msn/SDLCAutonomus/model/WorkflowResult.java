@@ -1,16 +1,18 @@
-package com.msn.SDLCAPI.model;
+package com.msn.SDLCAutonomus.model;
 
 import java.util.ArrayList;
 import java.util.List;
 
+import lombok.AllArgsConstructor;
 import lombok.Data;
 
 @Data
+@AllArgsConstructor
 public class WorkflowResult {
 
-    String commitMessage = "feat: Initial project scaffold by AI agent";
-    String requirementsSummary = "";
-    String codeAndTestOutput = "";
-    final List<String> dependencyList = new ArrayList<>();
+    private String commitMessage;
+    private String requirementsSummary;
+    private String codeAndTestOutput;
+    private List<String> dependencyList;
 
 }

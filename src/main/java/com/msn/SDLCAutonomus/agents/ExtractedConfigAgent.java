@@ -1,4 +1,4 @@
-package com.msn.SDLCAPI.agents;
+package com.msn.SDLCAutonomus.agents;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -14,10 +14,10 @@ import com.google.adk.runner.InMemoryRunner;
 import com.google.adk.sessions.Session;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
-import com.msn.SDLCAPI.model.ExtractedConfig;
-import com.msn.SDLCAPI.model.GitConfig;
-import com.msn.SDLCAPI.model.ProjectConfig;
-import com.msn.SDLCAPI.service.UtilityService;
+import com.msn.SDLCAutonomus.model.ExtractedConfig;
+import com.msn.SDLCAutonomus.model.GitConfig;
+import com.msn.SDLCAutonomus.model.ProjectConfig;
+import com.msn.SDLCAutonomus.service.UtilityService;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

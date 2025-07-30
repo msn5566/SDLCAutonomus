@@ -1,4 +1,4 @@
-package com.msn.SDLCAPI.service;
+package com.msn.SDLCAutonomus.service;
 
 import java.io.File;
 import java.io.IOException;
@@ -7,25 +7,22 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import org.springframework.stereotype.Service;
 
-import com.msn.SDLCAPI.agents.BuildCorrectorAgent;
-import com.msn.SDLCAPI.agents.ChangeAnalysisAgent;
-import com.msn.SDLCAPI.agents.ContextExtractionAgent;
-import com.msn.SDLCAPI.agents.ExtractedConfigAgent;
-import com.msn.SDLCAPI.agents.MainWorkflowAgent;
-import com.msn.SDLCAPI.agents.ReviewAgent;
-import com.msn.SDLCAPI.model.ExtractedConfig;
-import com.msn.SDLCAPI.model.GitConfig;
-import com.msn.SDLCAPI.model.JiraConfig;
-import com.msn.SDLCAPI.model.ProjectConfig;
-import com.msn.SDLCAPI.model.SrsData;
-import com.msn.SDLCAPI.model.WorkflowResult;
+import com.msn.SDLCAutonomus.agents.BuildCorrectorAgent;
+import com.msn.SDLCAutonomus.agents.ChangeAnalysisAgent;
+import com.msn.SDLCAutonomus.agents.ContextExtractionAgent;
+import com.msn.SDLCAutonomus.agents.ExtractedConfigAgent;
+import com.msn.SDLCAutonomus.agents.MainWorkflowAgent;
+import com.msn.SDLCAutonomus.agents.ReviewAgent;
+import com.msn.SDLCAutonomus.model.ExtractedConfig;
+import com.msn.SDLCAutonomus.model.GitConfig;
+import com.msn.SDLCAutonomus.model.JiraConfig;
+import com.msn.SDLCAutonomus.model.ProjectConfig;
+import com.msn.SDLCAutonomus.model.SrsData;
+import com.msn.SDLCAutonomus.model.WorkflowResult;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -51,17 +48,17 @@ public class SDLCAutoService {
       private static final String NO_CHANGES_DETECTED = "No changes detected.";
       
 
-    public void runSDLCAuto() throws IOException {
+    public String runSDLCAuto(String jiraTicket) throws Exception {
         JiraConfig jiraConfig ;
         String userInput;
         ExtractedConfig extractedConfig;
         String featureBranch;
         try {
-            jiraConfig = configService.getJiraConfig();;
+            jiraConfig = configService.getJiraConfig(jiraTicket);;
         } catch (IOException e) {
             log.error("❌ Configuration error: {}", e.getMessage());
             log.error("  - Please set JIRA_URL, JIRA_EMAIL, and JIRA_API_TOKEN environment variables.");
-            return;
+            throw e;
         }
 
        
@@ -69,14 +66,14 @@ public class SDLCAutoService {
             userInput = configService.getJiraIssueContent(jiraConfig);
         } catch (Exception e) {
             log.error("❌ Failed to fetch Jira issue: {}. Please check your credentials, URL, and issue key.", e.getMessage());
-            return;
+            throw e;
         }
        
         try {
             extractedConfig = extractedConfigAgent.runConfigAgent(userInput);
         } catch (IOException e) {
             log.error("❌ Failed to read configuration from Jira issue description: {}", e.getMessage());
-            return;
+            throw e;
         }
 
 
@@ -87,7 +84,7 @@ public class SDLCAutoService {
 
 
         if(absolutePath == null){
-            return;
+            return null;
         }else{
             gitConfig.setRepoPath(absolutePath);    
         }
@@ -96,7 +93,7 @@ public class SDLCAutoService {
             utilityService.ensureRepositoryIsReady(gitConfig.getRepoPath(), gitConfig.getRepoUrl(), gitConfig.getBaseBranch());
         } catch (Exception e) {
             log.error("❌ Failed to prepare the repository for analysis. Aborting. Error: {}", e.getMessage());
-            return;
+            throw e;
         }
 
 
@@ -108,7 +105,7 @@ public class SDLCAutoService {
         if (changeAnalysis.trim().equals(NO_CHANGES_DETECTED)) {
             log.info("\n✅ No functional changes detected in SRS. The local repository has been updated to the latest from the base branch, but no feature branch will be created.");
             // The changelog is not written because no feature branch is created.
-            return;
+            throw new DuplicateFormatFlagsException(null);
         }  
         
         
@@ -118,7 +115,7 @@ public class SDLCAutoService {
             featureBranch = utilityService.createFeatureBranch(gitConfig.getRepoPath(), jiraConfig.getIssueKey());
         } catch (Exception e) {
             log.error("❌ Failed to create feature branch. Aborting. Error: {}", e.getMessage());
-            return;
+            throw e;
         }
 
 
@@ -137,13 +134,13 @@ public class SDLCAutoService {
 
         if (workflowResult == null) {
             log.error("Workflow execution failed. Could not generate project files. Aborting.");
-            return;
+            return null;
         }
 
         writeClassesToFileSystemService.generateProjectFiles(gitConfig.getRepoPath(), workflowResult, userInput, changeAnalysis, srsData.getProjectConfig(), featureBranch);    
 
         // --- Quality Gate: Verify the build before committing ---
-        String buildResult = utilityService.verifyProjectBuild(gitConfig.getRepoPath());
+        String buildResult = verifyProjectBuild(gitConfig.getRepoPath());
         
         if (buildResult == null) {
             // --- HAPPY PATH: Build Succeeded ---
@@ -191,7 +188,7 @@ public class SDLCAutoService {
                     writeClassesToFileSystemService.writeClassesToFileSystem(correctedCode, gitConfig.getRepoPath());
 
                     // Retry the build
-                    buildResult = utilityService.verifyProjectBuild(gitConfig.getRepoPath());
+                    buildResult = verifyProjectBuild(gitConfig.getRepoPath());
                     if (buildResult == null) {
                         buildSuccess = true;
                         log.info("\n\n✅✅✅ Build Succeeded after self-healing! Proceeding to commit...");
@@ -225,7 +222,7 @@ public class SDLCAutoService {
 
 
     
-    
+        return gitConfig.getRepoPath();
     }
 
     private String performChangeAnalysis(String repoDir, String newSrs) {
@@ -327,7 +324,33 @@ public class SDLCAutoService {
         return allCode.toString();
     }
 
-    
+    public String verifyProjectBuild(String repoName) {
+        log.info("\n--- 🛡️  Running Build & Static Analysis Verification ---");
+        log.info("Wait .... Manven Build is running ...");
+        try {
+            File workingDir = new File(repoName);
+            // Using 'verify' phase runs compilation, tests
+            utilityService.runCommand(workingDir, getMavenExecutable(), "clean", "verify");
+            log.info("✅ Build successful. Code compiled, tests passed, and static analysis found no critical issues.");
+            return null; // Return null on success
+        } catch (IOException | InterruptedException e) {
+            log.error("❌ BUILD FAILED! A critical issue was found.", e);
+            log.error("  - The build failed, tests did not pass.");
+            log.error("  - The faulty code will NOT be committed. Please review the logs above for details.");
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            // --- NEW: Analyze the build failure ---
+            String buildLog = e.getMessage(); // The exception message now contains the full log
+            String analysis = reviewAgent.runReviewAgent(buildLog);
+            log.error("🤖 Review Agent Analysis:\n---\n{}\n---", analysis);
+            return buildLog; // Return the log on failure
+        }
+    }
+
+    private static String getMavenExecutable() {
+        return System.getProperty("os.name").toLowerCase().startsWith("windows") ? "mvn.cmd" : "mvn";
+    }
 
 
 }

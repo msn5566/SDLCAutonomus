@@ -1,4 +1,4 @@
-package com.msn.SDLCAPI.service;
+package com.msn.SDLCAutonomus.service;
 
 import java.io.File;
 import java.io.IOException;
@@ -20,11 +20,11 @@ import java.awt.Desktop;
 
 import org.springframework.stereotype.Service;
 
-import com.msn.SDLCAPI.agents.ReviewAgent;
-import com.msn.SDLCAPI.model.GitConfig;
-import com.msn.SDLCAPI.model.ProjectConfig;
-import com.msn.SDLCAPI.model.SrsData;
-import com.msn.SDLCAPI.model.WorkflowResult;
+import com.msn.SDLCAutonomus.agents.ReviewAgent;
+import com.msn.SDLCAutonomus.model.GitConfig;
+import com.msn.SDLCAutonomus.model.ProjectConfig;
+import com.msn.SDLCAutonomus.model.SrsData;
+import com.msn.SDLCAutonomus.model.WorkflowResult;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,9 +33,6 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @AllArgsConstructor
 public class UtilityService {
-
-    private final ReviewAgent reviewAgent;
-
 
     private static final String DEPENDENCY_AGENT_NAME = "DependencyAgent";
     private static final String CODEGEN_AGENT_NAME = "CodeGenAgent";
@@ -364,35 +361,6 @@ public class UtilityService {
         return agentPrompts;
     }
 
-    public String verifyProjectBuild(String repoName) {
-        log.info("\n--- 🛡️  Running Build & Static Analysis Verification ---");
-        log.info("Wait .... Manven Build is running ...");
-        try {
-            File workingDir = new File(repoName);
-            // Using 'verify' phase runs compilation, tests
-            runCommand(workingDir, getMavenExecutable(), "clean", "verify");
-            log.info("✅ Build successful. Code compiled, tests passed, and static analysis found no critical issues.");
-            return null; // Return null on success
-        } catch (IOException | InterruptedException e) {
-            log.error("❌ BUILD FAILED! A critical issue was found.", e);
-            log.error("  - The build failed, tests did not pass.");
-            log.error("  - The faulty code will NOT be committed. Please review the logs above for details.");
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            // --- NEW: Analyze the build failure ---
-            String buildLog = e.getMessage(); // The exception message now contains the full log
-            String analysis = reviewAgent.runReviewAgent(buildLog);
-            log.error("🤖 Review Agent Analysis:\n---\n{}\n---", analysis);
-            return buildLog; // Return the log on failure
-        }
-    }
-
-    private static String getMavenExecutable() {
-        return System.getProperty("os.name").toLowerCase().startsWith("windows") ? "mvn.cmd" : "mvn";
-    }
-
-
     public void addGitignoreEntry(String repoPath, String entry) {
         Path gitignorePath = Paths.get(repoPath, ".gitignore");
         try {
@@ -486,7 +454,7 @@ public class UtilityService {
      * @throws IOException If the command fails with a non-zero exit code.
      * @throws InterruptedException If the thread is interrupted while waiting for the process.
      */
-    private String runCommand(File workingDir, String... command) throws IOException, InterruptedException {
+    public String runCommand(File workingDir, String... command) throws IOException, InterruptedException {
         ProcessBuilder pb = new ProcessBuilder(command).directory(workingDir);
         Process process = pb.start();
 

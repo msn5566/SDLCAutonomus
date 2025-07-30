@@ -1,4 +1,4 @@
-package com.msn.SDLCAPI.service;
+package com.msn.SDLCAutonomus.service;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -15,9 +15,9 @@ import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
 
-import com.msn.SDLCAPI.agents.CodeMergeAgent;
-import com.msn.SDLCAPI.model.ProjectConfig;
-import com.msn.SDLCAPI.model.WorkflowResult;
+import com.msn.SDLCAutonomus.agents.CodeMergeAgent;
+import com.msn.SDLCAutonomus.model.ProjectConfig;
+import com.msn.SDLCAutonomus.model.WorkflowResult;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

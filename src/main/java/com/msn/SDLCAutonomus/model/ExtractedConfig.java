@@ -1,4 +1,4 @@
-package com.msn.SDLCAPI.model;
+package com.msn.SDLCAutonomus.model;
 
 import lombok.Data;
 
