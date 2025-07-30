@@ -1,0 +1,333 @@
+package com.msn.SDLCAPI.service;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.stereotype.Service;
+
+import com.msn.SDLCAPI.agents.BuildCorrectorAgent;
+import com.msn.SDLCAPI.agents.ChangeAnalysisAgent;
+import com.msn.SDLCAPI.agents.ContextExtractionAgent;
+import com.msn.SDLCAPI.agents.ExtractedConfigAgent;
+import com.msn.SDLCAPI.agents.MainWorkflowAgent;
+import com.msn.SDLCAPI.agents.ReviewAgent;
+import com.msn.SDLCAPI.model.ExtractedConfig;
+import com.msn.SDLCAPI.model.GitConfig;
+import com.msn.SDLCAPI.model.JiraConfig;
+import com.msn.SDLCAPI.model.ProjectConfig;
+import com.msn.SDLCAPI.model.SrsData;
+import com.msn.SDLCAPI.model.WorkflowResult;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Service
+@AllArgsConstructor
+@Slf4j
+public class SDLCAutoService {
+
+    private final ConfigService configService;
+    private final ExtractedConfigAgent extractedConfigAgent;
+    private final UtilityService utilityService;
+    private final ChangeAnalysisAgent changeAnalysisAgent;
+    private final ContextExtractionAgent contextExtractionAgent;
+    private final MainWorkflowAgent mainWorkflowAgent;
+    private final WriteClassesToFileSystemService writeClassesToFileSystemService;
+    private final ReviewAgent reviewAgent;
+    private final BuildCorrectorAgent buildCorrectorAgent;
+
+      // --- Constants for File System and Git ---
+      private static final String AI_STATE_DIR = ".ai-state";
+      private static final String JIRA_STATE_FILE_NAME = "jira_issue.txt";
+      private static final String NO_CHANGES_DETECTED = "No changes detected.";
+      
+
+    public void runSDLCAuto() throws IOException {
+        JiraConfig jiraConfig ;
+        String userInput;
+        ExtractedConfig extractedConfig;
+        String featureBranch;
+        try {
+            jiraConfig = configService.getJiraConfig();;
+        } catch (IOException e) {
+            log.error("❌ Configuration error: {}", e.getMessage());
+            log.error("  - Please set JIRA_URL, JIRA_EMAIL, and JIRA_API_TOKEN environment variables.");
+            return;
+        }
+
+       
+        try {
+            userInput = configService.getJiraIssueContent(jiraConfig);
+        } catch (Exception e) {
+            log.error("❌ Failed to fetch Jira issue: {}. Please check your credentials, URL, and issue key.", e.getMessage());
+            return;
+        }
+       
+        try {
+            extractedConfig = extractedConfigAgent.runConfigAgent(userInput);
+        } catch (IOException e) {
+            log.error("❌ Failed to read configuration from Jira issue description: {}", e.getMessage());
+            return;
+        }
+
+
+        GitConfig gitConfig = extractedConfig.getGitConfig();
+        ProjectConfig projectConfig = extractedConfig.getProjectConfig();
+        SrsData srsData = new SrsData(gitConfig, projectConfig, userInput);
+        String absolutePath = utilityService.createTempDir(gitConfig.getRepoPath());
+
+
+        if(absolutePath == null){
+            return;
+        }else{
+            gitConfig.setRepoPath(absolutePath);    
+        }
+
+        try {
+            utilityService.ensureRepositoryIsReady(gitConfig.getRepoPath(), gitConfig.getRepoUrl(), gitConfig.getBaseBranch());
+        } catch (Exception e) {
+            log.error("❌ Failed to prepare the repository for analysis. Aborting. Error: {}", e.getMessage());
+            return;
+        }
+
+
+
+          // Perform change analysis by comparing the new SRS with the last known version.
+          String changeAnalysis = performChangeAnalysis(gitConfig.getRepoPath(), userInput);
+          
+         // If the analysis agent found no changes, skip the rest of the workflow.
+        if (changeAnalysis.trim().equals(NO_CHANGES_DETECTED)) {
+            log.info("\n✅ No functional changes detected in SRS. The local repository has been updated to the latest from the base branch, but no feature branch will be created.");
+            // The changelog is not written because no feature branch is created.
+            return;
+        }  
+        
+        
+        // Since changes were detected, proceed with creating a feature branch.
+        
+        try {
+            featureBranch = utilityService.createFeatureBranch(gitConfig.getRepoPath(), jiraConfig.getIssueKey());
+        } catch (Exception e) {
+            log.error("❌ Failed to create feature branch. Aborting. Error: {}", e.getMessage());
+            return;
+        }
+
+
+         // Get the list of existing files to provide context to the agent.
+         String existingFiles = utilityService.getCurrentProjectFiles(gitConfig.getRepoPath());
+
+         // --- NEW: Context Extraction for ALL existing Java files ---
+         String combinedContext = contextExtraction(gitConfig.getRepoPath());
+
+        // --- NEW: Read existing pom.xml and parse dependencies for DependencyAgent ---
+        List<String> existingPomDependencies = getDependencyContext(gitConfig.getRepoPath());
+
+        Map<String, String> agentPrompts = utilityService.getAgentPrompts(srsData, combinedContext, existingFiles, existingPomDependencies);
+
+        final WorkflowResult workflowResult = mainWorkflowAgent.runMainWorkflow(userInput, srsData.getProjectConfig(), agentPrompts, existingPomDependencies);
+
+        if (workflowResult == null) {
+            log.error("Workflow execution failed. Could not generate project files. Aborting.");
+            return;
+        }
+
+        writeClassesToFileSystemService.generateProjectFiles(gitConfig.getRepoPath(), workflowResult, userInput, changeAnalysis, srsData.getProjectConfig(), featureBranch);    
+
+        // --- Quality Gate: Verify the build before committing ---
+        String buildResult = utilityService.verifyProjectBuild(gitConfig.getRepoPath());
+        
+        if (buildResult == null) {
+            // --- HAPPY PATH: Build Succeeded ---
+            log.info("\n\n✅✅✅ Build Succeeded! Proceeding to commit and create Pull Request...");
+
+            // --- NEW: Delete target directory before commit ---
+            try {
+                Path targetDir = Paths.get(gitConfig.getRepoPath(), "target");
+                if (Files.exists(targetDir)) {
+                    log.info("Deleting target directory before commit: {}", targetDir);
+                    Files.walk(targetDir)
+                        .sorted(Comparator.reverseOrder())
+                        .map(Path::toFile)
+                        .forEach(File::delete);
+                }
+            } catch (IOException e) {
+                log.warn("Could not delete target directory: {}", e.getMessage());
+            }
+            // --- END DELETE ---
+
+            // --- NEW: Add target/ to .gitignore to prevent pushing build artifacts ---
+            utilityService.addGitignoreEntry(gitConfig.getRepoPath(), "target/");
+            // --- END NEW LOGIC ---
+
+            utilityService.finalizeAndSubmit(gitConfig, featureBranch, workflowResult.getCommitMessage());
+        } else {
+            // --- FAILURE PATH: Build Failed, attempting self-healing ---
+            boolean buildSuccess = false;
+            for (int i = 0; i < 3; i++) { // Max 3 retries
+                log.error("\n\n❌❌❌ Build Failed on attempt {}. Starting self-healing process...", i + 1);
+                String reviewAnalysis = reviewAgent.runReviewAgent(buildResult);
+               // String faultyFilePath = findFaultyFile(reviewAnalysis, gitConfig.repoPath);
+
+                // --- NEW: Get all source code for the agent to analyze ---
+                String allSourceCode = getAllSourceCodeForCorrection(gitConfig.getRepoPath());
+                if (allSourceCode.isEmpty()) {
+                    log.error("Could not find any source code to analyze for self-healing. Aborting.");
+                    break;
+                }
+                String correctedCode = buildCorrectorAgent.runBuildCorrectorAgent(buildResult, reviewAnalysis, allSourceCode);
+
+                if (correctedCode != null && !correctedCode.isBlank()) {
+                    log.info("🤖 BuildCorrectorAgent provided a fix. Applying changes...");
+                    // The writeClassesToFileSystem can handle create/modify based on the markers
+                    writeClassesToFileSystemService.writeClassesToFileSystem(correctedCode, gitConfig.getRepoPath());
+
+                    // Retry the build
+                    buildResult = utilityService.verifyProjectBuild(gitConfig.getRepoPath());
+                    if (buildResult == null) {
+                        buildSuccess = true;
+                        log.info("\n\n✅✅✅ Build Succeeded after self-healing! Proceeding to commit...");
+                        utilityService.finalizeAndSubmit(gitConfig, featureBranch, workflowResult.getCommitMessage());
+                        break;
+                    }
+                } else {
+                    log.error("BuildCorrectorAgent failed to provide a fix. Aborting self-healing.");
+                    break;
+                }
+            }
+
+            if (!buildSuccess) {
+                log.error("\n\n❌❌❌ Self-healing failed. Committing generated code with final failure analysis...");
+                String analysis = reviewAgent.runReviewAgent(buildResult); // Final analysis
+                try {
+                    Path analysisFile = Paths.get(gitConfig.getRepoPath(), "BUILD_FAILURE_ANALYSIS.md");
+                    String fileContent = "# AI Build Failure Analysis\n\n"
+                        + "The AI-generated code failed the build verification step. Here is the analysis from the Review Agent:\n\n"
+                        + "---\n\n"
+                        + analysis;
+                    Files.writeString(analysisFile, fileContent);
+                    log.info("✅ Wrote build failure analysis to {}", analysisFile.getFileName());
+                } catch (IOException e) {
+                    log.error("❌ Failed to write build failure analysis file.", e);
+                }
+                String failedCommitMessage = "fix(ai): [BUILD FAILED] " + workflowResult.getCommitMessage();
+                utilityService.commitAndPush(gitConfig.getRepoPath(), failedCommitMessage, featureBranch);
+            }
+        }
+
+
+    
+    
+    }
+
+    private String performChangeAnalysis(String repoDir, String newSrs) {
+        try {
+            Path oldSrsPath = Paths.get(repoDir, AI_STATE_DIR, JIRA_STATE_FILE_NAME);
+            String oldSrsContent = "";
+            if (Files.exists(oldSrsPath)) {
+                log.info("Found previous Jira issue state file for comparison.");
+                oldSrsContent = Files.readString(oldSrsPath);
+            } else {
+                log.info("No previous Jira issue state file found. This will be an initial analysis.");
+            }
+            return changeAnalysisAgent.runChangeAnalysisAgent(oldSrsContent, newSrs);
+        } catch (RuntimeException e) {
+            log.warn("Could not perform change analysis after multiple retries: {}", e.getMessage());
+            return "Change analysis failed to run: " + e.getMessage();
+        } catch (Exception e) {
+            log.warn("Could not perform change analysis: {}", e.getMessage());
+            return "Change analysis failed to run: " + e.getMessage();
+        }
+    }
+
+
+    private String contextExtraction(String repoPath){
+        // --- NEW: Context Extraction for ALL existing Java files ---
+        StringBuilder allContextSummaries = new StringBuilder();
+        try {
+            Path srcPath = Paths.get(repoPath, "src", "main", "java");
+            if (Files.exists(srcPath)) {
+                Files.walk(srcPath)
+                    .filter(path -> path.toString().endsWith(".java"))
+                    .forEach(path -> {
+                        try {
+                          //  if(path.toString().contains("Controller") || path.toString().contains("entity") || path.toString().contains("model")) {
+                                String fileContent = Files.readString(path);
+                                String contextSummary = contextExtractionAgent.runContextExtractionAgent(fileContent);
+                                allContextSummaries.append("--- File: ").append(srcPath.relativize(path)).append(" ---\n");
+                                allContextSummaries.append(contextSummary).append("\n\n");
+                            //}
+                        } catch (IOException e) {
+                            log.warn("Could not read or process file for context: {}", path);
+                        }
+                    });
+            }
+        } catch (IOException e) {
+            log.error("❌ Could not walk source tree for context extraction: {}", e.getMessage());
+        }
+        return allContextSummaries.toString();
+        
+        // --- END Context Extraction ---
+    }
+
+    private List<String> getDependencyContext(String repoPath){
+         // --- NEW: Read existing pom.xml and parse dependencies for DependencyAgent ---
+         List<String> existingPomDependencies = new ArrayList<>();
+         Path pomFilePath = Paths.get(repoPath, "pom.xml");
+         if (Files.exists(pomFilePath)) {
+             try {
+                 String pomContent = Files.readString(pomFilePath);
+                 existingPomDependencies = utilityService.parseExistingDependenciesFromPom(pomContent);
+                 log.info("Existing pom.xml content: {}", existingPomDependencies);
+                 log.info("Found existing pom.xml with {} dependencies.", existingPomDependencies.size());
+             } catch (IOException e) {
+                 log.warn("Could not read or parse existing pom.xml for dependencies: {}", e.getMessage());
+             }
+         } else {
+             log.info("No existing pom.xml found. DependencyAgent will start from a clean slate.");
+         }
+
+         return existingPomDependencies;
+         // --- END NEW LOGIC ---
+    }
+
+    private String getAllSourceCodeForCorrection(String repoPath) {
+        StringBuilder allCode = new StringBuilder();
+        Path srcRoot = Paths.get(repoPath, "src");
+        if (!Files.exists(srcRoot)) {
+            log.warn("Source directory does not exist in {}. Cannot get code for correction.", repoPath);
+            return "";
+        }
+        try {
+            Files.walk(srcRoot)
+                    .filter(path -> path.toString().endsWith(".java"))
+                    .forEach(path -> {
+                        try {
+                            String content = Files.readString(path);
+                            // Use a relative path from the repo root for the marker
+                            String relativePath = Paths.get(repoPath).relativize(path).toString().replace('\\', '/');
+                            allCode.append(String.format("--- FILE START: %s ---\n", relativePath));
+                            allCode.append(content).append("\n");
+                            allCode.append(String.format("--- FILE END: %s ---\n\n", relativePath));
+                        } catch (IOException e) {
+                            log.warn("Could not read source file {}: {}", path, e.getMessage());
+                        }
+                    });
+        } catch (IOException e) {
+            log.error("Error walking source tree for self-healing: {}", e.getMessage());
+        }
+        return allCode.toString();
+    }
+
+    
+
+
+}
