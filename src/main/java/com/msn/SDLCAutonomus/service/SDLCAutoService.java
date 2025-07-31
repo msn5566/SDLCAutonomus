@@ -50,6 +50,7 @@ public class SDLCAutoService {
     private final XmlPojoAgent xmlPojoAgent;
     private final ExcelAgent excelAgent;
     private final XmlTransformerAgent xmlTransformerAgent;
+    private final DataService dataService;
 
       // --- Constants for File System and Git ---
       private static final String AI_STATE_DIR = ".ai-state";
