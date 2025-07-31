@@ -1,0 +1,17 @@
+
+
+---
+**Date:** 2025-08-01 02:13:13
+**Branch:** feature/AG-18_20250801021206
+---
+
+Feature: View materials per employee
+
+As a client, I want to create a POJO from the source.xml and expected_target.xml files, and the data should be mapped from source.xml to expected_target.xml by looking at the mapping_with_validation.csv file, and create a collection in mongoDB if not exist as a test, and create a document of the source data 
+
+[^expected_target.xml]
+
+[^source.xml] [^mapping_with_validation.csv]  GitHub-URL: [https://github.com/msn5566/SDLCAutonomus|https://github.com/msn5566/SDLCAutonomus|smart-link] 
+checkout_branch: development
+Repository-Name: SDLCAutonomus
+--- END ---

@@ -1,0 +1,3 @@
+SourcePath,TargetPath,TransformationRule,ValidationRule
+SourcePath1,TargetPath1,COPY,NOT_NULL
+SourcePath2,TargetPath2,TO_UPPERCASE,
