@@ -11,6 +11,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -380,18 +381,35 @@ public class UtilityService {
         }
     }
 
-    public void finalizeAndSubmit(GitConfig gitConfig, String featureBranch, String commitMessage) {
+    public String finalizeAndSubmit(GitConfig gitConfig, String featureBranch, String commitMessage) {
         commitAndPush(gitConfig.getRepoPath(), commitMessage, featureBranch);
         String prUrl = createPullRequest(gitConfig.getRepoPath(), gitConfig.getBaseBranch(), featureBranch, commitMessage);
         if (prUrl != null) {
             openInBrowser(prUrl);
         }
+        return prUrl;
     }
     
 
     public void commitAndPush(String baseDir, String commitMessage, String branch) {
         try {
             File workingDir = new File(baseDir);
+
+            // --- NEW: Delete target directory before commit ---
+            try {
+                Path targetDir = Paths.get(baseDir, "target");
+                if (Files.exists(targetDir)) {
+                    log.info("Deleting target directory before commit: {}", targetDir);
+                    Files.walk(targetDir)
+                        .sorted(Comparator.reverseOrder())
+                        .map(Path::toFile)
+                        .forEach(File::delete);
+                }
+            } catch (IOException e) {
+                log.warn("Could not delete target directory before commit: {}", e.getMessage());
+            }
+            // --- END NEW LOGIC ---
+
             log.info("Adding files to Git...");
             runCommand(workingDir, "git", "add", ".");
 

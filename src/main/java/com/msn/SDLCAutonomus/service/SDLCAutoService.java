@@ -17,6 +17,10 @@ import com.msn.SDLCAutonomus.agents.ContextExtractionAgent;
 import com.msn.SDLCAutonomus.agents.ExtractedConfigAgent;
 import com.msn.SDLCAutonomus.agents.MainWorkflowAgent;
 import com.msn.SDLCAutonomus.agents.ReviewAgent;
+import com.msn.SDLCAutonomus.agents.XmlPojoAgent;
+import com.msn.SDLCAutonomus.agents.ExcelAgent;
+import com.msn.SDLCAutonomus.agents.XmlTransformerAgent;
+
 import com.msn.SDLCAutonomus.model.ExtractedConfig;
 import com.msn.SDLCAutonomus.model.GitConfig;
 import com.msn.SDLCAutonomus.model.JiraConfig;
@@ -41,6 +45,9 @@ public class SDLCAutoService {
     private final WriteClassesToFileSystemService writeClassesToFileSystemService;
     private final ReviewAgent reviewAgent;
     private final BuildCorrectorAgent buildCorrectorAgent;
+    private final XmlPojoAgent xmlPojoAgent;
+    private final ExcelAgent excelAgent;
+    private final XmlTransformerAgent xmlTransformerAgent;
 
       // --- Constants for File System and Git ---
       private static final String AI_STATE_DIR = ".ai-state";
@@ -141,6 +148,7 @@ public class SDLCAutoService {
 
         // --- Quality Gate: Verify the build before committing ---
         String buildResult = verifyProjectBuild(gitConfig.getRepoPath());
+        String prUrl = null;
         
         if (buildResult == null) {
             // --- HAPPY PATH: Build Succeeded ---
@@ -165,14 +173,24 @@ public class SDLCAutoService {
             utilityService.addGitignoreEntry(gitConfig.getRepoPath(), "target/");
             // --- END NEW LOGIC ---
 
-            utilityService.finalizeAndSubmit(gitConfig, featureBranch, workflowResult.getCommitMessage());
+            prUrl = utilityService.finalizeAndSubmit(gitConfig, featureBranch, workflowResult.getCommitMessage());
         } else {
             // --- FAILURE PATH: Build Failed, attempting self-healing ---
             boolean buildSuccess = false;
-            for (int i = 0; i < 3; i++) { // Max 3 retries
+            String previousReviewAnalysis = ""; // Initialize to an empty string
+            int maxReviewRetries = 10; // Define max retries
+
+            for (int i = 0; i < maxReviewRetries; i++) { // Loop up to maxReviewRetries
                 log.error("\n\n❌❌❌ Build Failed on attempt {}. Starting self-healing process...", i + 1);
-                String reviewAnalysis = reviewAgent.runReviewAgent(buildResult);
-               // String faultyFilePath = findFaultyFile(reviewAnalysis, gitConfig.repoPath);
+                String currentReviewAnalysis = reviewAgent.runReviewAgent(buildResult);
+                
+                if (currentReviewAnalysis.equals(previousReviewAnalysis) && i > 0) {
+                    log.info("Review analysis is identical to previous one. Stopping self-healing attempts.");
+                    break; // Stop if analysis hasn't changed (after the first attempt)
+                }
+                previousReviewAnalysis = currentReviewAnalysis; // Update for next iteration
+
+                // String faultyFilePath = findFaultyFile(reviewAnalysis, gitConfig.repoPath);
 
                 // --- NEW: Get all source code for the agent to analyze ---
                 String allSourceCode = getAllSourceCodeForCorrection(gitConfig.getRepoPath());
@@ -180,7 +198,7 @@ public class SDLCAutoService {
                     log.error("Could not find any source code to analyze for self-healing. Aborting.");
                     break;
                 }
-                String correctedCode = buildCorrectorAgent.runBuildCorrectorAgent(buildResult, reviewAnalysis, allSourceCode);
+                String correctedCode = buildCorrectorAgent.runBuildCorrectorAgent(buildResult, currentReviewAnalysis, allSourceCode);
 
                 if (correctedCode != null && !correctedCode.isBlank()) {
                     log.info("🤖 BuildCorrectorAgent provided a fix. Applying changes...");
@@ -192,8 +210,8 @@ public class SDLCAutoService {
                     if (buildResult == null) {
                         buildSuccess = true;
                         log.info("\n\n✅✅✅ Build Succeeded after self-healing! Proceeding to commit...");
-                        utilityService.finalizeAndSubmit(gitConfig, featureBranch, workflowResult.getCommitMessage());
-                        break;
+                        prUrl = utilityService.finalizeAndSubmit(gitConfig, featureBranch, workflowResult.getCommitMessage());
+                        break; // Build succeeded, break loop
                     }
                 } else {
                     log.error("BuildCorrectorAgent failed to provide a fix. Aborting self-healing.");
@@ -222,7 +240,7 @@ public class SDLCAutoService {
 
 
     
-        return gitConfig.getRepoPath();
+        return prUrl == null ? gitConfig.getRepoPath() : prUrl;
     }
 
     private String performChangeAnalysis(String repoDir, String newSrs) {
@@ -352,5 +370,120 @@ public class SDLCAutoService {
         return System.getProperty("os.name").toLowerCase().startsWith("windows") ? "mvn.cmd" : "mvn";
     }
 
+    public String runDynamicAgent(String agentType, String input1, String input2) {
+        switch (agentType) {
+            case "xml-pojo-gen":
+                return xmlPojoAgent.runXmlPojoAgent(input1);
+            case "excel-map":
+                return excelAgent.runExcelAgent(input1, input2);
+            // Removed xml-transform from here, use runXmlTransformationWorkflow for this complex workflow
+            // case "xml-transform":
+            //     return xmlTransformerAgent.runXmlTransformerAgent(input1, input2);
+            // Add more cases for other agents as needed
+            default:
+                return "Unknown agent type: " + agentType;
+        }
+    }
+
+    public String runXmlTransformationWorkflow(String sourceXmlContent, String mappingExcelContent, GitConfig gitConfig, ProjectConfig projectConfig) throws Exception {
+        log.info("--- 🚀 Starting XML Transformation Workflow ---");
+
+        // 1. Generate Source POJOs from Source XML
+        log.info("Calling XmlPojoAgent to generate Source POJOs...");
+        String sourcePojosJavaCode = xmlPojoAgent.runXmlPojoAgent(sourceXmlContent);
+        if (sourcePojosJavaCode == null || sourcePojosJavaCode.isBlank()) {
+            log.error("❌ XmlPojoAgent failed to generate Source POJOs. Aborting workflow.");
+            return "XmlPojoAgent failed.";
+        }
+        writeClassesToFileSystemService.writeClassesToFileSystem(sourcePojosJavaCode, gitConfig.getRepoPath());
+        log.info("✅ Source POJOs generated and written to file system.");
+
+        // 2. Generate Mapping/Validation Logic from Excel and Source POJOs
+        log.info("Calling ExcelAgent to generate Mapping Logic...");
+        String mappingLogicJavaCode = excelAgent.runExcelAgent(sourcePojosJavaCode, mappingExcelContent);
+        if (mappingLogicJavaCode == null || mappingLogicJavaCode.isBlank()) {
+            log.error("❌ ExcelAgent failed to generate Mapping Logic. Aborting workflow.");
+            return "ExcelAgent failed.";
+        }
+        // Mapping logic is a snippet, will be part of the final transformation class
+        log.info("✅ Mapping Logic generated.");
+
+        // 3. Assemble full Transformation Code (Target POJOs + Transformer Class)
+        log.info("Calling XmlTransformerAgent to assemble final transformation code...");
+        String finalTransformationCode = xmlTransformerAgent.runXmlTransformerAgent(sourceXmlContent, mappingExcelContent, sourcePojosJavaCode, mappingLogicJavaCode);
+        if (finalTransformationCode == null || finalTransformationCode.isBlank()) {
+            log.error("❌ XmlTransformerAgent failed to assemble final transformation code. Aborting workflow.");
+            return "XmlTransformerAgent failed.";
+        }
+        writeClassesToFileSystemService.writeClassesToFileSystem(finalTransformationCode, gitConfig.getRepoPath());
+        log.info("✅ Final Transformation Code generated and written to file system.");
+
+        // --- Quality Gate: Verify the build before committing ---
+        log.info("--- Quality Gate: Verifying build after XML transformation generation ---");
+        String buildResult = verifyProjectBuild(gitConfig.getRepoPath());
+        String prUrl = null;
+
+        if (buildResult == null) {
+            log.info("\n\n✅✅✅ Build Succeeded after XML transformation workflow! Proceeding to commit and create Pull Request...");
+            // target directory deletion is already handled by UtilityService.commitAndPush
+            // gitignore entry is already handled at the start of runSDLCAuto or by previous user action
+            String commitMessage = "feat(xml-transform): Implement XML transformation logic";
+            prUrl = utilityService.finalizeAndSubmit(gitConfig, "feature/xml-transform-" + UUID.randomUUID().toString().substring(0,8), commitMessage);
+        } else {
+            log.error("\n\n❌❌❌ Build Failed after XML transformation workflow. Self-healing process initiated...");
+            String previousReviewAnalysis = "";
+            int maxReviewRetries = 10;
+            boolean buildSuccessAfterHealing = false;
+
+            for (int i = 0; i < maxReviewRetries; i++) {
+                log.error("\n\n❌❌❌ Build Failed on attempt {}. Starting self-healing process...", i + 1);
+                String currentReviewAnalysis = reviewAgent.runReviewAgent(buildResult);
+                
+                if (currentReviewAnalysis.equals(previousReviewAnalysis) && i > 0) {
+                    log.info("Review analysis is identical to previous one. Stopping self-healing attempts.");
+                    break;
+                }
+                previousReviewAnalysis = currentReviewAnalysis;
+
+                String allSourceCode = getAllSourceCodeForCorrection(gitConfig.getRepoPath());
+                if (allSourceCode.isEmpty()) {
+                    log.error("Could not find any source code to analyze for self-healing. Aborting.");
+                    break;
+                }
+                String correctedCode = buildCorrectorAgent.runBuildCorrectorAgent(buildResult, currentReviewAnalysis, allSourceCode);
+
+                if (correctedCode != null && !correctedCode.isBlank()) {
+                    log.info("🤖 BuildCorrectorAgent provided a fix. Applying changes...");
+                    writeClassesToFileSystemService.writeClassesToFileSystem(correctedCode, gitConfig.getRepoPath());
+
+                    buildResult = verifyProjectBuild(gitConfig.getRepoPath());
+                    if (buildResult == null) {
+                        buildSuccessAfterHealing = true;
+                        log.info("\n\n✅✅✅ Build Succeeded after self-healing! Proceeding to commit...");
+                        prUrl = utilityService.finalizeAndSubmit(gitConfig, "feature/xml-transform-" + UUID.randomUUID().toString().substring(0,8), "fix(xml-transform): Self-healed build failure");
+                        break;
+                    }
+                } else {
+                    log.error("BuildCorrectorAgent failed to provide a fix. Aborting self-healing.");
+                    break;
+                }
+            }
+            if (!buildSuccessAfterHealing) {
+                log.error("\n\n❌❌❌ Self-healing failed after {} attempts. Committing generated code with final failure analysis...", maxReviewRetries);
+                String analysis = reviewAgent.runReviewAgent(buildResult);
+                try {
+                    Path analysisFile = Paths.get(gitConfig.getRepoPath(), "BUILD_FAILURE_ANALYSIS.md");
+                    String fileContent = "# AI Build Failure Analysis\n\n" + "The AI-generated XML transformation code failed the build verification step. Here is the analysis from the Review Agent:\n\n" + "---\n\n" + analysis;
+                    Files.writeString(analysisFile, fileContent);
+                    log.info("✅ Wrote build failure analysis to {}", analysisFile.getFileName());
+                } catch (IOException e) {
+                    log.error("❌ Failed to write build failure analysis file.", e);
+                }
+                String failedCommitMessage = "fix(ai): [BUILD FAILED - XML Transform] " + "Implement XML transformation logic";
+                utilityService.commitAndPush(gitConfig.getRepoPath(), failedCommitMessage, "feature/xml-transform-failure");
+            }
+        }
+        return prUrl == null ? gitConfig.getRepoPath() : prUrl;
+    }
 
 }
