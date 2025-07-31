@@ -8,6 +8,7 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 
@@ -27,6 +28,7 @@ import com.msn.SDLCAutonomus.model.JiraConfig;
 import com.msn.SDLCAutonomus.model.ProjectConfig;
 import com.msn.SDLCAutonomus.model.SrsData;
 import com.msn.SDLCAutonomus.model.WorkflowResult;
+import com.msn.SDLCAutonomus.model.JiraAttachment;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -477,13 +479,111 @@ public class SDLCAutoService {
                     Files.writeString(analysisFile, fileContent);
                     log.info("✅ Wrote build failure analysis to {}", analysisFile.getFileName());
                 } catch (IOException e) {
-                    log.error("❌ Failed to write build failure analysis file.", e);
+                    log.error("Failed to write build failure analysis file", e);
                 }
-                String failedCommitMessage = "fix(ai): [BUILD FAILED - XML Transform] " + "Implement XML transformation logic";
-                utilityService.commitAndPush(gitConfig.getRepoPath(), failedCommitMessage, "feature/xml-transform-failure");
+                prUrl = utilityService.finalizeAndSubmit(gitConfig, "feature/xml-transform-" + UUID.randomUUID().toString().substring(0,8), "feat(xml-transform): Generated code with build issues - see BUILD_FAILURE_ANALYSIS.md");
             }
         }
-        return prUrl == null ? gitConfig.getRepoPath() : prUrl;
+
+        return prUrl != null ? "✅ XML Transformation Workflow completed successfully!\n\nPull Request URL: " + prUrl : "❌ XML Transformation Workflow failed. Check logs for details.";
+    }
+
+    /**
+     * Runs XML transformation workflow using attachments from a Jira issue
+     * @param jiraTicket The Jira issue key (e.g., "PROJ-123")
+     * @param xmlAttachmentName The filename of the XML attachment to use as source
+     * @param excelAttachmentName The filename of the Excel attachment to use for mapping
+     * @return Result message with PR URL if successful
+     */
+    public String runXmlTransformationWorkflowFromJiraAttachments(String jiraTicket, String xmlAttachmentName, String excelAttachmentName) throws Exception {
+        log.info("--- 🚀 Starting XML Transformation Workflow from Jira Attachments ---");
+        log.info("Jira Ticket: {}", jiraTicket);
+        log.info("XML Attachment: {}", xmlAttachmentName);
+        log.info("Excel Attachment: {}", excelAttachmentName);
+
+        // 1. Get Jira configuration and fetch attachments
+        JiraConfig jiraConfig = configService.getJiraConfig(jiraTicket);
+        List<JiraAttachment> attachments = configService.getJiraAttachments(jiraConfig);
+        
+        if (attachments.isEmpty()) {
+            throw new IOException("No attachments found for Jira issue: " + jiraTicket);
+        }
+
+        // 2. Find the required attachments
+        JiraAttachment xmlAttachment = null;
+        JiraAttachment excelAttachment = null;
+
+        for (JiraAttachment attachment : attachments) {
+            if (attachment.getFilename().equalsIgnoreCase(xmlAttachmentName)) {
+                xmlAttachment = attachment;
+            }
+            if (attachment.getFilename().equalsIgnoreCase(excelAttachmentName)) {
+                excelAttachment = attachment;
+            }
+        }
+
+        if (xmlAttachment == null) {
+            throw new IOException("XML attachment not found: " + xmlAttachmentName + ". Available attachments: " + 
+                attachments.stream().map(JiraAttachment::getFilename).collect(Collectors.joining(", ")));
+        }
+
+        if (excelAttachment == null) {
+            throw new IOException("Excel attachment not found: " + excelAttachmentName + ". Available attachments: " + 
+                attachments.stream().map(JiraAttachment::getFilename).collect(Collectors.joining(", ")));
+        }
+
+        // 3. Download attachment contents
+        log.info("Downloading XML attachment: {}", xmlAttachment.getFilename());
+        String sourceXmlContent = configService.downloadAttachmentAsString(jiraConfig, xmlAttachment.getContentUrl(), "UTF-8");
+        
+        log.info("Downloading Excel attachment: {}", excelAttachment.getFilename());
+        String mappingExcelContent = configService.downloadAttachmentAsString(jiraConfig, excelAttachment.getContentUrl(), "UTF-8");
+
+        // 4. Extract configuration from Jira issue description
+        String userInput = configService.getJiraIssueContent(jiraConfig);
+        ExtractedConfig extractedConfig = extractedConfigAgent.runConfigAgent(userInput);
+        
+        GitConfig gitConfig = extractedConfig.getGitConfig();
+        ProjectConfig projectConfig = extractedConfig.getProjectConfig();
+
+        // 5. Prepare repository
+        String absolutePath = utilityService.createTempDir(gitConfig.getRepoPath());
+        if (absolutePath == null) {
+            throw new IOException("Failed to create temporary directory for repository");
+        }
+        gitConfig.setRepoPath(absolutePath);
+
+        utilityService.ensureRepositoryIsReady(gitConfig.getRepoPath(), gitConfig.getRepoUrl(), gitConfig.getBaseBranch());
+
+        // 6. Run the XML transformation workflow
+        return runXmlTransformationWorkflow(sourceXmlContent, mappingExcelContent, gitConfig, projectConfig);
+    }
+
+    /**
+     * Lists all attachments for a Jira issue
+     * @param jiraTicket The Jira issue key (e.g., "PROJ-123")
+     * @return JSON string with attachment information
+     */
+    public String listJiraAttachments(String jiraTicket) throws Exception {
+        log.info("Listing attachments for Jira ticket: {}", jiraTicket);
+        
+        JiraConfig jiraConfig = configService.getJiraConfig(jiraTicket);
+        List<JiraAttachment> attachments = configService.getJiraAttachments(jiraConfig);
+        
+        if (attachments.isEmpty()) {
+            return "No attachments found for Jira issue: " + jiraTicket;
+        }
+        
+        StringBuilder result = new StringBuilder();
+        result.append("Attachments for Jira issue ").append(jiraTicket).append(":\n\n");
+        
+        for (JiraAttachment attachment : attachments) {
+            result.append("📎 ").append(attachment.getFilename())
+                  .append(" (").append(attachment.getSize()).append(" bytes, ")
+                  .append(attachment.getMimeType()).append(")\n");
+        }
+        
+        return result.toString();
     }
 
 }

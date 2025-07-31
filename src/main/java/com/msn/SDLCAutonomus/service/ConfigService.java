@@ -9,6 +9,7 @@ import java.util.Scanner;
 import org.springframework.stereotype.Service;
 
 import com.msn.SDLCAutonomus.model.JiraConfig;
+import com.msn.SDLCAutonomus.model.JiraAttachment;
 
 import lombok.extern.slf4j.Slf4j;
 import java.net.http.HttpClient;
@@ -17,6 +18,7 @@ import java.net.http.HttpResponse;
 import java.net.URI;
 import java.util.Base64;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 @Service
 @Slf4j
@@ -77,6 +79,84 @@ public class ConfigService {
         log.debug("  - Description: {}", description);
 
         return summary + "\n\n" + description;
+    }
+
+    /**
+     * Fetches attachment metadata for a Jira issue
+     */
+    public List<JiraAttachment> getJiraAttachments(JiraConfig jiraConfig) throws Exception {
+        log.info("Fetching attachments for Jira issue: {}", jiraConfig.getIssueKey());
+
+        HttpClient client = HttpClient.newHttpClient();
+        String url = jiraConfig.getJiraUrl() + "/rest/api/2/issue/" + jiraConfig.getIssueKey() + "?fields=attachment";
+
+        String auth = jiraConfig.getUsername() + ":" + jiraConfig.getApiToken();
+        String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes(StandardCharsets.UTF_8));
+
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(new URI(url))
+            .header("Authorization", "Basic " + encodedAuth)
+            .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() != 200) {
+            throw new IOException("Failed to fetch Jira attachments. Status code: " + response.statusCode() + " - " + response.body());
+        }
+
+        JSONObject issueJson = new JSONObject(response.body());
+        JSONObject fields = issueJson.getJSONObject("fields");
+        JSONArray attachments = fields.optJSONArray("attachment");
+
+        List<JiraAttachment> attachmentList = new ArrayList<>();
+        if (attachments != null) {
+            for (int i = 0; i < attachments.length(); i++) {
+                JSONObject attachment = attachments.getJSONObject(i);
+                JiraAttachment jiraAttachment = new JiraAttachment(
+                    attachment.getString("filename"),
+                    attachment.getString("content"),
+                    attachment.getLong("size"),
+                    attachment.getString("mimeType")
+                );
+                attachmentList.add(jiraAttachment);
+            }
+        }
+
+        log.info("✅ Successfully fetched {} attachments for issue: {}", attachmentList.size(), jiraConfig.getIssueKey());
+        return attachmentList;
+    }
+
+    /**
+     * Downloads a specific attachment from Jira
+     */
+    public byte[] downloadJiraAttachment(JiraConfig jiraConfig, String attachmentUrl) throws Exception {
+        log.info("Downloading attachment from: {}", attachmentUrl);
+
+        HttpClient client = HttpClient.newHttpClient();
+        String auth = jiraConfig.getUsername() + ":" + jiraConfig.getApiToken();
+        String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes(StandardCharsets.UTF_8));
+
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(new URI(attachmentUrl))
+            .header("Authorization", "Basic " + encodedAuth)
+            .build();
+
+        HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+
+        if (response.statusCode() != 200) {
+            throw new IOException("Failed to download attachment. Status code: " + response.statusCode());
+        }
+
+        log.info("✅ Successfully downloaded attachment: {} bytes", response.body().length);
+        return response.body();
+    }
+
+    /**
+     * Downloads and converts attachment content to string (for XML/Excel files)
+     */
+    public String downloadAttachmentAsString(JiraConfig jiraConfig, String attachmentUrl, String encoding) throws Exception {
+        byte[] attachmentBytes = downloadJiraAttachment(jiraConfig, attachmentUrl);
+        return new String(attachmentBytes, encoding != null ? encoding : StandardCharsets.UTF_8.name());
     }
 
 }
