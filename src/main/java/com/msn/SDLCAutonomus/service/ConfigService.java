@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
+import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 
@@ -144,7 +145,20 @@ public class ConfigService {
         HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
 
         if (response.statusCode() != 200) {
-            throw new IOException("Failed to download attachment. Status code: " + response.statusCode());
+            if (response.statusCode() == 303) {
+                // Handle 303 See Other redirect
+                Optional<String> locationHeader = response.headers().firstValue("Location");
+                if (locationHeader.isPresent()) {
+                    String newAttachmentUrl = locationHeader.get();
+                    log.info("Received 303 redirect. Following to: {}", newAttachmentUrl);
+                    // Recursively call with the new URL
+                    return downloadJiraAttachment(jiraConfig, newAttachmentUrl);
+                } else {
+                    throw new IOException("Received 303 status but no Location header found.");
+                }
+            } else {
+                throw new IOException("Failed to download attachment. Status code: " + response.statusCode());
+            }
         }
 
         log.info("✅ Successfully downloaded attachment: {} bytes", response.body().length);

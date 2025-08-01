@@ -30,6 +30,11 @@ public class XmlPojoAgent {
                 .instruction("""
                     You are an expert Java developer. Your task is to analyze the provided XML content and generate appropriate Java POJO (Plain Old Java Object) classes. Each class should represent an XML element, with fields corresponding to attributes and child elements.
                     
+                    **CRITICAL INSTRUCTIONS:**
+                    1. **Output Format:**
+                    - For a **NEW file**, use the format with a full path from the project root. Example: `// Create File: src/main/java/com/yourcompany/service/UserService.java`
+                    - For **MODIFYING an existing file**, use the format with a full path from the project root. Example: `// Modify File: src/main/java/com/yourcompany/service/UserService.java`
+
                     Guidelines:
                     1. For each XML element, create a Java class with a name derived from the element name (e.g., <book> -> Book).
                     2. Use Lombok annotations (@Data, @NoArgsConstructor, @AllArgsConstructor) for boilerplate code.
