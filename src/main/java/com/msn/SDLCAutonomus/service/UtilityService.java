@@ -18,6 +18,14 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.awt.Desktop;
+import javax.xml.validation.SchemaFactory;
+import javax.xml.validation.Validator;
+import org.xml.sax.SAXException;
+import javax.xml.transform.Source;
+import javax.xml.transform.stream.StreamSource;
+import javax.xml.XMLConstants;
+import javax.xml.validation.Schema;
+import java.io.StringReader;
 
 import org.springframework.stereotype.Service;
 
@@ -362,22 +370,46 @@ public class UtilityService {
         return agentPrompts;
     }
 
-    public void addGitignoreEntry(String repoPath, String entry) {
+    public void addGitignoreEntry(String repoPath, String entry) throws IOException {
         Path gitignorePath = Paths.get(repoPath, ".gitignore");
+        if (!Files.exists(gitignorePath)) {
+            Files.createFile(gitignorePath);
+        }
+        List<String> lines = Files.readAllLines(gitignorePath);
+        if (!lines.contains(entry)) {
+            Files.write(gitignorePath, (entry + System.lineSeparator()).getBytes(), StandardOpenOption.APPEND);
+            log.info("Added '{}' to .gitignore in {}.", entry, repoPath);
+        }
+    }
+
+    public void validateXmlWithXsd(String xmlContent, String xsdContent) throws IOException, SAXException {
+        log.info("Starting XML validation against generated XSD...");
         try {
-            if (!Files.exists(gitignorePath)) {
-                Files.createFile(gitignorePath);
-                log.info("✅ Created .gitignore at: {}", gitignorePath);
-            }
-            List<String> lines = Files.readAllLines(gitignorePath);
-            if (!lines.contains(entry)) {
-                Files.write(gitignorePath, (entry + System.lineSeparator()).getBytes(), StandardOpenOption.APPEND);
-                log.info("✅ Added '{}' to .gitignore in: {}", entry, gitignorePath);
-            } else {
-                log.info("Skipped '{}' as it already exists in .gitignore.", entry);
-            }
+
+            System.out.println("validateXmlWithXsd_xmlContent : "+xmlContent);
+            System.out.println("validateXmlWithXsd_xsdContent :"+xsdContent);
+            // Create a SchemaFactory capable of understanding W3C XML Schema.
+            SchemaFactory factory = SchemaFactory.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
+
+            // Compile the schema from the XSD content.
+            Source xsdSource = new StreamSource(new StringReader(xsdContent));
+            Schema schema = factory.newSchema(xsdSource);
+
+            // Create a Validator object, which can be used to validate XML documents against the schema.
+            Validator validator = schema.newValidator();
+
+            // Parse the XML document to be validated.
+            Source xmlSource = new StreamSource(new StringReader(xmlContent));
+
+            // Validate the XML content
+            validator.validate(xmlSource);
+            log.info("✅ XML validation successful.");
+        } catch (SAXException e) {
+            log.error("❌ XML validation failed: {}", e.getMessage());
+            throw e; // Re-throw to indicate failure
         } catch (IOException e) {
-            log.error("❌ Failed to add '{}' to .gitignore: {}", entry, e.getMessage());
+            log.error("❌ Error during XML validation: {}", e.getMessage());
+            throw e; // Re-throw to indicate failure
         }
     }
 

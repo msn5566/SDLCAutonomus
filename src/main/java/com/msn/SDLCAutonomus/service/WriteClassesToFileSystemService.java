@@ -160,7 +160,7 @@ public class WriteClassesToFileSystemService {
         String content = "";
 
         // Extract content from markdown code blocks (e.g., ```java ... ```) if they exist.
-        Pattern codeBlockPattern = Pattern.compile("```(?:java)?\\s*\\n(.*?)\\n```", Pattern.DOTALL);
+        Pattern codeBlockPattern = Pattern.compile("```(?:java|xml)?\\s*\\n(.*?)\\n```", Pattern.DOTALL);
         Matcher codeMatcher = codeBlockPattern.matcher(rawContent);
 
         if (codeMatcher.find()) {

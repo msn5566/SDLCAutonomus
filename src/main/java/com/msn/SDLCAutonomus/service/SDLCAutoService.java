@@ -1,14 +1,13 @@
 package com.msn.SDLCAutonomus.service;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
@@ -21,7 +20,8 @@ import com.msn.SDLCAutonomus.agents.MainWorkflowAgent;
 import com.msn.SDLCAutonomus.agents.ReviewAgent;
 import com.msn.SDLCAutonomus.agents.XmlPojoAgent;
 import com.msn.SDLCAutonomus.agents.ExcelAgent;
-import com.msn.SDLCAutonomus.agents.XmlTransformerAgent;
+import com.msn.SDLCAutonomus.agents.JsonMappingAgent;
+import com.msn.SDLCAutonomus.agents.XsdGeneratorAgent;
 
 import com.msn.SDLCAutonomus.model.ExtractedConfig;
 import com.msn.SDLCAutonomus.model.GitConfig;
@@ -33,6 +33,8 @@ import com.msn.SDLCAutonomus.model.JiraAttachment;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import org.xml.sax.SAXException;
 
 @Service
 @AllArgsConstructor
@@ -50,21 +52,22 @@ public class SDLCAutoService {
     private final BuildCorrectorAgent buildCorrectorAgent;
     private final XmlPojoAgent xmlPojoAgent;
     private final ExcelAgent excelAgent;
-    private final XmlTransformerAgent xmlTransformerAgent;
+    private final JsonMappingAgent jsonMappingAgent;
+    private final XsdGeneratorAgent xsdGeneratorAgent;
 
       // --- Constants for File System and Git ---
       private static final String AI_STATE_DIR = ".ai-state";
       private static final String JIRA_STATE_FILE_NAME = "jira_issue.txt";
       private static final String NO_CHANGES_DETECTED = "No changes detected.";
-      
 
-    public String runSDLCAuto(String jiraTicket) throws Exception {
-        JiraConfig jiraConfig ;
-        String userInput;
+      JiraConfig jiraConfig ;
+      String userInput;
+      GitConfig gitConfig;
+      ProjectConfig projectConfig;
+
+    private void setAllRequiredConfig(String jiraTicket) throws Exception{
+       
         ExtractedConfig extractedConfig;
-        String featureBranch;
-        String generatedPojoCode = null;
-        String generatedTransformationCode = null;
 
         try {
             jiraConfig = configService.getJiraConfig(jiraTicket);;
@@ -90,14 +93,13 @@ public class SDLCAutoService {
         }
 
 
-        GitConfig gitConfig = extractedConfig.getGitConfig();
-        ProjectConfig projectConfig = extractedConfig.getProjectConfig();
-        SrsData srsData = new SrsData(gitConfig, projectConfig, userInput);
+        gitConfig = extractedConfig.getGitConfig();
+        projectConfig = extractedConfig.getProjectConfig();
         String absolutePath = utilityService.createTempDir(gitConfig.getRepoPath());
 
 
         if(absolutePath == null){
-            return null;
+            return;
         }else{
             gitConfig.setRepoPath(absolutePath);    
         }
@@ -109,7 +111,16 @@ public class SDLCAutoService {
             throw e;
         }
 
+    }
+      
 
+    public String runSDLCAuto(String jiraTicket) throws Exception {
+        String featureBranch;
+        String generatedPojoCode = null;
+        String generatedTransformationCode = null;
+        SrsData srsData = new SrsData(gitConfig, projectConfig, userInput);
+
+        setAllRequiredConfig(jiraTicket);
         // --- NEW LOGIC: Check for POJO creation or XML transformation requirements ---
         String lowerCaseUserInput = userInput.toLowerCase();
         if (matchesPOJOMappingFromXML(lowerCaseUserInput,"pojo")) {
@@ -141,12 +152,12 @@ public class SDLCAutoService {
                 String excelAttachmentName = extractAttachmentNameFromJiraContent(userInput, "excelAttachment");
 
                 String sourceXmlContent = getAttachmentContent(jiraConfig, xmlAttachmentName, "source.xml");
-                String mappingExcelContent = getAttachmentContent(jiraConfig, excelAttachmentName, "mapping.xlsx");
+                String mappingExcelContent = getAttachmentContent(jiraConfig, excelAttachmentName, "mapping.csv");
                 
                 if (sourceXmlContent != null && mappingExcelContent != null) {
                     // Call the dedicated XML transformation workflow method
                     // This method already handles POJO gen + Excel mapping + transformation
-                    generatedTransformationCode = runXmlTransformationWorkflow(sourceXmlContent, mappingExcelContent, gitConfig, projectConfig);
+                    generatedTransformationCode = runXmlTransformationWorkflow(sourceXmlContent, mappingExcelContent, null, gitConfig, projectConfig);
                     if (generatedTransformationCode != null && !generatedTransformationCode.isBlank()) {
                         writeClassesToFileSystemService.writeClassesToFileSystem(generatedTransformationCode, gitConfig.getRepoPath());
                         log.info("✅ XML Transformation code generated by XmlTransformerAgent. : "+generatedTransformationCode);
@@ -438,6 +449,13 @@ public class SDLCAutoService {
         return System.getProperty("os.name").toLowerCase().startsWith("windows") ? "mvn.cmd" : "mvn";
     }
 
+
+
+
+    //================================================================================================================================
+
+   
+   
     public String runDynamicAgent(String agentType, String input1, String input2) {
         switch (agentType) {
             case "xml-pojo-gen":
@@ -453,105 +471,125 @@ public class SDLCAutoService {
         }
     }
 
-    public String runXmlTransformationWorkflow(String sourceXmlContent, String mappingExcelContent, GitConfig gitConfig, ProjectConfig projectConfig) throws Exception {
+    public String runXmlTransformationWorkflow(String sourceXmlContent, String mappingContent, String targetXmlContent, GitConfig gitConfig, ProjectConfig projectConfig) throws Exception {
         log.info("--- 🚀 Starting XML Transformation Workflow ---");
 
-        // 1. Generate Source POJOs from Source XML
-        log.info("Calling XmlPojoAgent to generate Source POJOs...");
-        String sourcePojosJavaCode = xmlPojoAgent.runXmlPojoAgent(sourceXmlContent);
-        if (sourcePojosJavaCode == null || sourcePojosJavaCode.isBlank()) {
-            log.error("❌ XmlPojoAgent failed to generate Source POJOs. Aborting workflow.");
-            return "XmlPojoAgent failed.";
+        // 1. Generate XSD from Source XML, Target XML, and JSON Mapping
+        log.info("Calling XsdGeneratorAgent to generate XSD...");
+        String rawXsdContent = xsdGeneratorAgent.runXsdGeneratorAgent(sourceXmlContent, targetXmlContent, mappingContent);
+        log.debug("Raw generatedXsdContent from XsdGeneratorAgent:\n{}", rawXsdContent);
+        if (rawXsdContent == null || rawXsdContent.isBlank()) {
+            log.error("❌ XSDGeneratorAgent failed to produce XSD. Aborting workflow.");
+            return "XSDGeneratorAgent failed.";
+        }else{
+             // Optionally, write the generated XSD to file system for inspection
+            writeClassesToFileSystemService.writeClassesToFileSystem(rawXsdContent,gitConfig.getRepoPath());
+            log.info("✅ XSD generated and written to file system.");
         }
-        writeClassesToFileSystemService.writeClassesToFileSystem(sourcePojosJavaCode, gitConfig.getRepoPath());
-        log.info("✅ Source POJOs generated and written to file system.");
 
-        // 2. Generate Mapping/Validation Logic from Excel and Source POJOs
-        log.info("Calling ExcelAgent to generate Mapping Logic...");
-        String mappingLogicJavaCode = excelAgent.runExcelAgent(sourcePojosJavaCode, mappingExcelContent);
-        if (mappingLogicJavaCode == null || mappingLogicJavaCode.isBlank()) {
-            log.error("❌ ExcelAgent failed to generate Mapping Logic. Aborting workflow.");
-            return "ExcelAgent failed.";
+        // Extract only the XML content to handle cases where the LLM adds extra text or whitespace
+        //Pattern xmlPattern = Pattern.compile("(?s)<\\?xml.*?><[^>]+>.*?</[^>]+>", Pattern.DOTALL);
+        Pattern xmlPattern = Pattern.compile("```(?:java|xml)?\\s*\\n(.*?)\\n```", Pattern.DOTALL);
+        Matcher matcher = xmlPattern.matcher(rawXsdContent);
+        String generatedXsdContent = "";
+        if (matcher.find()) {
+            generatedXsdContent = matcher.group(1).trim(); // Get the full matched XML including prolog and trim
+            log.debug("Cleaned generatedXsdContent:\n{}", generatedXsdContent);
+        } else {
+            log.warn("Could not find XML declaration in generated XSD. Attempting to proceed with original content.");
         }
-        // Mapping logic is a snippet, will be part of the final transformation class
-        log.info("✅ Mapping Logic generated.");
 
-        // 3. Assemble full Transformation Code (Target POJOs + Transformer Class)
-        log.info("Calling XmlTransformerAgent to assemble final transformation code...");
-        String finalTransformationCode = xmlTransformerAgent.runXmlTransformerAgent(sourceXmlContent, mappingExcelContent, sourcePojosJavaCode, mappingLogicJavaCode);
+
+        // 2. Validate Source XML against the generated XSD
+        try {
+            // Trim whitespace from XML and XSD content before validation
+            String trimmedSourceXmlContent = sourceXmlContent.trim();
+            String trimmedGeneratedXsdContent = generatedXsdContent.replace("```", "").trim();
+            utilityService.validateXmlWithXsd(trimmedSourceXmlContent, trimmedGeneratedXsdContent);
+            log.info("✅ Source XML validated successfully against generated XSD.");
+        } catch (SAXException | IOException e) {
+            e.printStackTrace();
+            log.error("❌ Source XML validation failed against generated XSD: {}", e.getMessage());
+            return "XML Validation Failed: " + e.getMessage();
+        }
+
+        // 3. Generate full transformation code using JsonMappingAgent (now without redundant Java validation logic)
+        log.info("Calling JsonMappingAgent to generate full transformation code...");
+        String finalTransformationCode = jsonMappingAgent.runJsonMappingAgent(sourceXmlContent, mappingContent, targetXmlContent);
+        
         if (finalTransformationCode == null || finalTransformationCode.isBlank()) {
-            log.error("❌ XmlTransformerAgent failed to assemble final transformation code. Aborting workflow.");
-            return "XmlTransformerAgent failed.";
+            log.error("❌ JsonMappingAgent failed to produce full transformation code. Aborting workflow.");
+            return "JsonMappingAgent failed.";
         }
         writeClassesToFileSystemService.writeClassesToFileSystem(finalTransformationCode, gitConfig.getRepoPath());
         log.info("✅ Final Transformation Code generated and written to file system.");
 
         // --- Quality Gate: Verify the build before committing ---
-        log.info("--- Quality Gate: Verifying build after XML transformation generation ---");
-        String buildResult = verifyProjectBuild(gitConfig.getRepoPath());
-        String prUrl = null;
+        // log.info("--- Quality Gate: Verifying build after XML transformation generation ---");
+        // String buildResult = verifyProjectBuild(gitConfig.getRepoPath());
+        // String prUrl = null;
 
-        if (buildResult == null) {
-            log.info("\n\n✅✅✅ Build Succeeded after XML transformation workflow! Proceeding to commit and create Pull Request...");
-            // target directory deletion is already handled by UtilityService.commitAndPush
-            // gitignore entry is already handled at the start of runSDLCAuto or by previous user action
-            String commitMessage = "feat(xml-transform): Implement XML transformation logic";
-            prUrl = utilityService.finalizeAndSubmit(gitConfig, "feature/xml-transform-" + UUID.randomUUID().toString().substring(0,8), commitMessage);
-        } else {
-            log.error("\n\n❌❌❌ Build Failed after XML transformation workflow. Self-healing process initiated...");
-            String previousReviewAnalysis = "";
-            int maxReviewRetries = 10;
-            boolean buildSuccessAfterHealing = false;
+        // if (buildResult == null) {
+        //     log.info("\n\n✅✅✅ Build Succeeded after XML transformation workflow! Proceeding to commit and create Pull Request...");
+        //     // target directory deletion is already handled by UtilityService.commitAndPush
+        //     // gitignore entry is already handled at the start of runSDLCAuto or by previous user action
+        //     String commitMessage = "feat(xml-transform): Implement XML transformation logic";
+        //     prUrl = utilityService.finalizeAndSubmit(gitConfig, "feature/xml-transform-" + UUID.randomUUID().toString().substring(0,8), commitMessage);
+        // } else {
+        //     log.error("\n\n❌❌❌ Build Failed after XML transformation workflow. Self-healing process initiated...");
+        //     String previousReviewAnalysis = "";
+        //     int maxReviewRetries = 10;
+        //     boolean buildSuccessAfterHealing = false;
 
-            for (int i = 0; i < maxReviewRetries; i++) {
-                log.error("\n\n❌❌❌ Build Failed on attempt {}. Starting self-healing process...", i + 1);
-                String currentReviewAnalysis = reviewAgent.runReviewAgent(buildResult);
+        //     for (int i = 0; i < maxReviewRetries; i++) {
+        //         log.error("\n\n❌❌❌ Build Failed on attempt {}. Starting self-healing process...", i + 1);
+        //         String currentReviewAnalysis = reviewAgent.runReviewAgent(buildResult);
                 
-                if (currentReviewAnalysis.equals(previousReviewAnalysis) && i > 0) {
-                    log.info("Review analysis is identical to previous one. Stopping self-healing attempts.");
-                    break;
-                }
-                previousReviewAnalysis = currentReviewAnalysis;
+        //         if (currentReviewAnalysis.equals(previousReviewAnalysis) && i > 0) {
+        //             log.info("Review analysis is identical to previous one. Stopping self-healing attempts.");
+        //             break;
+        //         }
+        //         previousReviewAnalysis = currentReviewAnalysis;
 
-                String allSourceCode = getAllSourceCodeForCorrection(gitConfig.getRepoPath());
-                if (allSourceCode.isEmpty()) {
-                    log.error("Could not find any source code to analyze for self-healing. Aborting.");
-                    break;
-                }
-                String correctedCode = buildCorrectorAgent.runBuildCorrectorAgent(buildResult, currentReviewAnalysis, allSourceCode);
+        //         String allSourceCode = getAllSourceCodeForCorrection(gitConfig.getRepoPath());
+        //         if (allSourceCode.isEmpty()) {
+        //             log.error("Could not find any source code to analyze for self-healing. Aborting.");
+        //             break;
+        //         }
+        //         String correctedCode = buildCorrectorAgent.runBuildCorrectorAgent(buildResult, currentReviewAnalysis, allSourceCode);
 
-                if (correctedCode != null && !correctedCode.isBlank()) {
-                    log.info("🤖 BuildCorrectorAgent provided a fix. Applying changes...");
-                    writeClassesToFileSystemService.writeClassesToFileSystem(correctedCode, gitConfig.getRepoPath());
+        //         if (correctedCode != null && !correctedCode.isBlank()) {
+        //             log.info("🤖 BuildCorrectorAgent provided a fix. Applying changes...");
+        //             writeClassesToFileSystemService.writeClassesToFileSystem(correctedCode, gitConfig.getRepoPath());
 
-                    buildResult = verifyProjectBuild(gitConfig.getRepoPath());
-                    if (buildResult == null) {
-                        buildSuccessAfterHealing = true;
-                        log.info("\n\n✅✅✅ Build Succeeded after self-healing! Proceeding to commit...");
-                        prUrl = utilityService.finalizeAndSubmit(gitConfig, "feature/xml-transform-" + UUID.randomUUID().toString().substring(0,8), "fix(xml-transform): Self-healed build failure");
-                        break;
-                    }
-                } else {
-                    log.error("BuildCorrectorAgent failed to provide a fix. Aborting self-healing.");
-                    break;
-                }
-            }
-            if (!buildSuccessAfterHealing) {
-                log.error("\n\n❌❌❌ Self-healing failed after {} attempts. Committing generated code with final failure analysis...", maxReviewRetries);
-                String analysis = reviewAgent.runReviewAgent(buildResult);
-                try {
-                    Path analysisFile = Paths.get(gitConfig.getRepoPath(), "BUILD_FAILURE_ANALYSIS.md");
-                    String fileContent = "# AI Build Failure Analysis\n\n" + "The AI-generated XML transformation code failed the build verification step. Here is the analysis from the Review Agent:\n\n" + "---\n\n" + analysis;
-                    Files.writeString(analysisFile, fileContent);
-                    log.info("✅ Wrote build failure analysis to {}", analysisFile.getFileName());
-                } catch (IOException e) {
-                    log.error("Failed to write build failure analysis file", e);
-                }
-                prUrl = utilityService.finalizeAndSubmit(gitConfig, "feature/xml-transform-" + UUID.randomUUID().toString().substring(0,8), "feat(xml-transform): Generated code with build issues - see BUILD_FAILURE_ANALYSIS.md");
-            }
-        }
+        //             buildResult = verifyProjectBuild(gitConfig.getRepoPath());
+        //             if (buildResult == null) {
+        //                 buildSuccessAfterHealing = true;
+        //                 log.info("\n\n✅✅✅ Build Succeeded after self-healing! Proceeding to commit...");
+        //                 prUrl = utilityService.finalizeAndSubmit(gitConfig, "feature/xml-transform-" + UUID.randomUUID().toString().substring(0,8), "fix(xml-transform): Self-healed build failure");
+        //                 break;
+        //             }
+        //         } else {
+        //             log.error("BuildCorrectorAgent failed to provide a fix. Aborting self-healing.");
+        //             break;
+        //         }
+        //     }
+        //     if (!buildSuccessAfterHealing) {
+        //         log.error("\n\n❌❌❌ Self-healing failed after {} attempts. Committing generated code with final failure analysis...", maxReviewRetries);
+        //         String analysis = reviewAgent.runReviewAgent(buildResult);
+        //         try {
+        //             Path analysisFile = Paths.get(gitConfig.getRepoPath(), "BUILD_FAILURE_ANALYSIS.md");
+        //             String fileContent = "# AI Build Failure Analysis\n\n" + "The AI-generated XML transformation code failed the build verification step. Here is the analysis from the Review Agent:\n\n" + "---\n\n" + analysis;
+        //             Files.writeString(analysisFile, fileContent);
+        //             log.info("✅ Wrote build failure analysis to {}", analysisFile.getFileName());
+        //         } catch (IOException e) {
+        //             log.error("Failed to write build failure analysis file", e);
+        //         }
+        //         prUrl = utilityService.finalizeAndSubmit(gitConfig, "feature/xml-transform-" + UUID.randomUUID().toString().substring(0,8), "feat(xml-transform): Generated code with build issues - see BUILD_FAILURE_ANALYSIS.md");
+        //     }
+        // }
 
-        return prUrl != null ? "✅ XML Transformation Workflow completed successfully!\n\nPull Request URL: " + prUrl : "❌ XML Transformation Workflow failed. Check logs for details.";
+        return "";//prUrl != null ? "✅ XML Transformation Workflow completed successfully!\n\nPull Request URL: " + prUrl : "❌ XML Transformation Workflow failed. Check logs for details.";
     }
 
     /**
@@ -561,11 +599,11 @@ public class SDLCAutoService {
      * @param excelAttachmentName The filename of the Excel attachment to use for mapping
      * @return Result message with PR URL if successful
      */
-    public String runXmlTransformationWorkflowFromJiraAttachments(String jiraTicket, String xmlAttachmentName, String excelAttachmentName) throws Exception {
+    public String runXmlTransformationWorkflowFromJiraAttachments(String jiraTicket, String xmlAttachmentName, String dataMappingFile, String targetXmlAttachmentName) throws Exception {
         log.info("--- 🚀 Starting XML Transformation Workflow from Jira Attachments ---");
         log.info("Jira Ticket: {}", jiraTicket);
         log.info("XML Attachment: {}", xmlAttachmentName);
-        log.info("Excel Attachment: {}", excelAttachmentName);
+        log.info("JSON Attachment: {}", dataMappingFile);
 
         // 1. Get Jira configuration and fetch attachments
         JiraConfig jiraConfig = configService.getJiraConfig(jiraTicket);
@@ -578,13 +616,17 @@ public class SDLCAutoService {
         // 2. Find the required attachments
         JiraAttachment xmlAttachment = null;
         JiraAttachment excelAttachment = null;
+        JiraAttachment targetXmlAttachment = null;
 
         for (JiraAttachment attachment : attachments) {
             if (attachment.getFilename().equalsIgnoreCase(xmlAttachmentName)) {
                 xmlAttachment = attachment;
             }
-            if (attachment.getFilename().equalsIgnoreCase(excelAttachmentName)) {
+            if (attachment.getFilename().equalsIgnoreCase(dataMappingFile)) {
                 excelAttachment = attachment;
+            }
+            if (targetXmlAttachmentName != null && attachment.getFilename().equalsIgnoreCase(targetXmlAttachmentName)) {
+                targetXmlAttachment = attachment;
             }
         }
 
@@ -593,8 +635,13 @@ public class SDLCAutoService {
                 attachments.stream().map(JiraAttachment::getFilename).collect(Collectors.joining(", ")));
         }
 
-        if (excelAttachment == null) {
-            throw new IOException("Excel attachment not found: " + excelAttachmentName + ". Available attachments: " + 
+        if (excelAttachment == null && (dataMappingFile != null && !dataMappingFile.isBlank())) {
+            throw new IOException("Excel attachment not found: " + dataMappingFile + ". Available attachments: " +
+                attachments.stream().map(JiraAttachment::getFilename).collect(Collectors.joining(", ")));
+        }
+
+        if (targetXmlAttachment == null && (targetXmlAttachmentName != null && !targetXmlAttachmentName.isBlank())) {
+             throw new IOException("Target XML attachment not found: " + targetXmlAttachmentName + ". Available attachments: " +
                 attachments.stream().map(JiraAttachment::getFilename).collect(Collectors.joining(", ")));
         }
 
@@ -602,8 +649,27 @@ public class SDLCAutoService {
         log.info("Downloading XML attachment: {}", xmlAttachment.getFilename());
         String sourceXmlContent = configService.downloadAttachmentAsString(jiraConfig, xmlAttachment.getContentUrl(), "UTF-8");
         
-        log.info("Downloading Excel attachment: {}", excelAttachment.getFilename());
-        String mappingExcelContent = configService.downloadAttachmentAsString(jiraConfig, excelAttachment.getContentUrl(), "UTF-8");
+        String mappingContent = null;
+        if (excelAttachment != null) {
+            log.info("Downloading Excel attachment: {}", excelAttachment.getFilename());
+            mappingContent = configService.downloadAttachmentAsString(jiraConfig, excelAttachment.getContentUrl(), "UTF-8");
+        }
+        
+        if (targetXmlAttachmentName != null && targetXmlAttachmentName.toLowerCase().endsWith(".json")) {
+            // Assuming a JSON mapping is provided via the targetXmlAttachmentName if it's a JSON file
+            log.info("Downloading JSON mapping attachment: {}", targetXmlAttachment.getFilename());
+            mappingContent = configService.downloadAttachmentAsString(jiraConfig, targetXmlAttachment.getContentUrl(), "UTF-8");
+        }
+
+        String targetXmlContent = null;
+        if (targetXmlAttachment != null) {
+            log.info("Downloading Target XML attachment: {}", targetXmlAttachment.getFilename());
+            targetXmlContent = configService.downloadAttachmentAsString(jiraConfig, targetXmlAttachment.getContentUrl(), "UTF-8");
+        }
+
+        if (mappingContent == null) {
+            throw new IOException("Neither Excel nor JSON mapping attachment found or specified.");
+        }
 
         // 4. Extract configuration from Jira issue description
         String userInput = configService.getJiraIssueContent(jiraConfig);
@@ -622,7 +688,7 @@ public class SDLCAutoService {
         utilityService.ensureRepositoryIsReady(gitConfig.getRepoPath(), gitConfig.getRepoUrl(), gitConfig.getBaseBranch());
 
         // 6. Run the XML transformation workflow
-        return runXmlTransformationWorkflow(sourceXmlContent, mappingExcelContent, gitConfig, projectConfig);
+        return runXmlTransformationWorkflow(sourceXmlContent, mappingContent, targetXmlContent, gitConfig, projectConfig);
     }
 
     /**

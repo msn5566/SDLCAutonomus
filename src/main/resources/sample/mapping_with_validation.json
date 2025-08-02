@@ -1,0 +1,63 @@
+{
+	"mappings": [
+		{
+			"sourceField": "Order.Customer.Name",
+			"targetField": "PurchaseOrder.Client.FullName",
+			"validation": {
+				"required": "True",
+				"type": "string",
+				"minLength": 3,
+				"maxLength": 50
+			}
+		},
+		{
+			"sourceField": "Order.Customer.Contact.Email",
+			"targetField": "PurchaseOrder.Client.Email",
+			"validation": {
+				"required": "True",
+				"type": "string",
+				"pattern": "^\\S+@\\S+\\.\\S+$"
+			}
+		},
+		{
+			"sourceField": "Order.Items.Item[]",
+			"targetField": "PurchaseOrder.Products.Product[]",
+			"occurrence": {
+				"min": 1,
+				"max": 100
+			},
+			"children": [
+				{
+					"sourceField": "ItemId",
+					"targetField": "Code",
+					"validation": {
+						"type": "string",
+						"minLength": 2
+					}
+				},
+				{
+					"sourceField": "Quantity",
+					"targetField": "Qty",
+					"validation": {
+						"type": "integer",
+						"min": 1
+					}
+				}
+			]
+		},
+		{
+			"sourceField": "Order.Billing.TotalAmount",
+			"targetField": "PurchaseOrder.Payment.Amount",
+			"validation": {
+				"type": "decimal",
+				"min": 0.01,
+				"max": 100000.0
+			}
+		},
+		{
+			"sourceField": "Order.Billing.Paid",
+			"targetField": "PurchaseOrder.Payment.Status",
+			"transform": "booleanToPaidStatus"
+		}
+	]
+}

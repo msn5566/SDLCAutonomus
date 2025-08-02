@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Order>
+    <OrderId>ORD12345</OrderId>
+    <OrderDate>2025-08-01</OrderDate>
+    <Customer>
+        <CustomerId>CUST001</CustomerId>
+        <Name>Jane Smith</Name>
+        <Contact>
+            <Email>jane@example.com</Email>
+            <Phone>1234567890</Phone>
+        </Contact>
+    </Customer>
+    <Items>
+        <Item>
+            <ItemId>IT001</ItemId>
+            <Description>Laptop</Description>
+            <Quantity>1</Quantity>
+            <Price>1500.00</Price>
+        </Item>
+        <Item>
+            <ItemId>IT002</ItemId>
+            <Description>Mouse</Description>
+            <Quantity>2</Quantity>
+            <Price>25.00</Price>
+        </Item>
+    </Items>
+    <Billing>
+        <CustomerId>CUST001</CustomerId>
+        <TotalAmount>1550.00</TotalAmount>
+        <Paid>true</Paid>
+    </Billing>
+</Order>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PurchaseOrder>
+    <Id>ORD12345</Id>
+    <Date>2025-08-01</Date>
+    <Client>
+        <Id>CUST001</Id>
+        <FullName>Jane Smith</FullName>
+        <Email>jane@example.com</Email>
+        <Phone>1234567890</Phone>
+    </Client>
+    <Products>
+        <Product>
+            <Code>IT001</Code>
+            <Name>Laptop</Name>
+            <Qty>1</Qty>
+            <UnitPrice>1500.00</UnitPrice>
+        </Product>
+        <Product>
+            <Code>IT002</Code>
+            <Name>Mouse</Name>
+            <Qty>2</Qty>
+            <UnitPrice>25.00</UnitPrice>
+        </Product>
+    </Products>
+    <Payment>
+        <CustomerId>CUST001</CustomerId>
+        <Amount>1550.00</Amount>
+        <Status>Paid</Status>
+    </Payment>
+</PurchaseOrder>

@@ -34,10 +34,11 @@ public class InputContoller {
     public String runXmlTransformationFromJiraAttachments(
             @PathVariable String jiraTicket,
             @RequestParam("xmlAttachment") String xmlAttachmentName,
-            @RequestParam("excelAttachment") String excelAttachmentName) throws Exception {
-        log.info("XML Transformation Request - Jira Ticket: {}, XML: {}, Excel: {}", 
-                jiraTicket, xmlAttachmentName, excelAttachmentName);
-        return sdlcAutoService.runXmlTransformationWorkflowFromJiraAttachments(jiraTicket, xmlAttachmentName, excelAttachmentName);
+            @RequestParam("dataMapping") String jsonAttachmentName,
+            @RequestParam(value = "targetXmlAttachment", required = false) String targetXmlAttachmentName) throws Exception {
+        log.info("XML Transformation Request - Jira Ticket: {}, XML: {}, Excel: {}, Target XML: {}", 
+                jiraTicket, xmlAttachmentName, jsonAttachmentName, targetXmlAttachmentName);
+        return sdlcAutoService.runXmlTransformationWorkflowFromJiraAttachments(jiraTicket, xmlAttachmentName, jsonAttachmentName, targetXmlAttachmentName);
     }
 
     @GetMapping("/attachments/{jiraTicket}")
